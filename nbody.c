@@ -35,7 +35,7 @@ void bodyForce(Body *p, float dt, int n) {
 
 int main(const int argc, const char** argv) {
   
-  int nBodies = 30000;
+  int nBodies = 32768;
   if (argc > 1) nBodies = atoi(argv[1]);
 
   const float dt = 0.01f; // time step
@@ -73,8 +73,8 @@ int main(const int argc, const char** argv) {
 #ifdef SHMOO
   printf("%d, %0.3f\n", nBodies, 1e-9 * nBodies * nBodies / avgTime);
 #else
-  printf("Average rate for iterations 2 through %d: %.3f +- %.3f steps per second.\n",
-         nIters, rate);
+  printf("Average rate for iterations 2 through %d: %.3f steps per second.\n",
+         nIters);
   printf("%d Bodies: average %0.3f Billion Interactions / second\n", nBodies, 1e-9 * nBodies * nBodies / avgTime);
 #endif
   free(buf);

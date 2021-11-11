@@ -3,10 +3,10 @@
 #include <stdlib.h>
 #include "timer.h"
 
-#define BLOCK_SIZE 256
+
 #define SOFTENING 1e-9f
 
-typedef struct { float4 *pos, *vel; } BodySystem;
+typedef struct { float *x, *y, *z, *vx, *vy, *vz; } BodySystem;
 
 void randomizeBodies(float *data, int n) {
   for (int i = 0; i < n; i++) {
@@ -14,59 +14,54 @@ void randomizeBodies(float *data, int n) {
   }
 }
 
-__global__
-void bodyForce(float4 *p, float4 *v, float dt, int n) {
-  int i = blockDim.x * blockIdx.x + threadIdx.x;
-  if (i < n) {
+
+void bodyForce(BodySystem p, float dt, int n) {
+  #pragma omp parallel for schedule(dynamic)
+  for (int i = 0; i < n; i++) { 
     float Fx = 0.0f; float Fy = 0.0f; float Fz = 0.0f;
 
     for (int j = 0; j < n; j++) {
-      float dx = p[j].x - p[i].x;
-      float dy = p[j].y - p[i].y;
-      float dz = p[j].z - p[i].z;
+      float dy = p.y[j] - p.y[i];
+      float dz = p.z[j] - p.z[i];
+      float dx = p.x[j] - p.x[i];
       float distSqr = dx*dx + dy*dy + dz*dz + SOFTENING;
-      float invDist = rsqrtf(distSqr);
+      float invDist = 1.0f / sqrtf(distSqr);
       float invDist3 = invDist * invDist * invDist;
 
       Fx += dx * invDist3; Fy += dy * invDist3; Fz += dz * invDist3;
     }
 
-    v[i].x += dt*Fx; v[i].y += dt*Fy; v[i].z += dt*Fz;
+    p.vx[i] += dt*Fx; p.vy[i] += dt*Fy; p.vz[i] += dt*Fz;
   }
 }
 
 int main(const int argc, const char** argv) {
   
-  int nBodies = 30000;
+  int nBodies = 32768;
   if (argc > 1) nBodies = atoi(argv[1]);
-  
+
   const float dt = 0.01f; // time step
   const int nIters = 10;  // simulation iterations
-  
-  int bytes = 2*nBodies*sizeof(float4);
+
+  int bytes = 6*nBodies*sizeof(float);
   float *buf = (float*)malloc(bytes);
-  BodySystem p = { (float4*)buf, ((float4*)buf) + nBodies };
+  BodySystem p;
+  p.x  = buf+0*nBodies; p.y  = buf+1*nBodies; p.z  = buf+2*nBodies;
+  p.vx = buf+3*nBodies; p.vy = buf+4*nBodies; p.vz = buf+5*nBodies;
 
-  randomizeBodies(buf, 8*nBodies); // Init pos / vel data
+  randomizeBodies(buf, 6*nBodies); // Init pos / vel data
 
-  float *d_buf;
-  cudaMalloc(&d_buf, bytes);
-  BodySystem d_p = { (float4*)d_buf, ((float4*)d_buf) + nBodies };
-
-  int nBlocks = (nBodies + BLOCK_SIZE - 1) / BLOCK_SIZE;
-  double totalTime = 0.0; 
+  double totalTime = 0.0;
 
   for (int iter = 1; iter <= nIters; iter++) {
     StartTimer();
 
-    cudaMemcpy(d_buf, buf, bytes, cudaMemcpyHostToDevice);
-    bodyForce<<<nBlocks, BLOCK_SIZE>>>(d_p.pos, d_p.vel, dt, nBodies);
-    cudaMemcpy(buf, d_buf, bytes, cudaMemcpyDeviceToHost);
+    bodyForce(p, dt, nBodies); // compute interbody forces
 
     for (int i = 0 ; i < nBodies; i++) { // integrate position
-      p.pos[i].x += p.vel[i].x*dt;
-      p.pos[i].y += p.vel[i].y*dt;
-      p.pos[i].z += p.vel[i].z*dt;
+      p.x[i] += p.vx[i]*dt;
+      p.y[i] += p.vy[i]*dt;
+      p.z[i] += p.vz[i]*dt;
     }
 
     const double tElapsed = GetTimer() / 1000.0;
@@ -82,10 +77,9 @@ int main(const int argc, const char** argv) {
 #ifdef SHMOO
   printf("%d, %0.3f\n", nBodies, 1e-9 * nBodies * nBodies / avgTime);
 #else
-  printf("Average rate for iterations 2 through %d: %.3f +- %.3f steps per second.\n",
-         nIters, rate);
+  printf("Average rate for iterations 2 through %d: %.3f steps per second.\n",
+         nIters);
   printf("%d Bodies: average %0.3f Billion Interactions / second\n", nBodies, 1e-9 * nBodies * nBodies / avgTime);
 #endif
   free(buf);
-  cudaFree(d_buf);
 }
